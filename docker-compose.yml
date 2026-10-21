@@ -1,0 +1,44 @@
+services:
+  # ---------- 1. 原有：FunASR 原生 WebSocket 服务（GPU） ----------
+  fun-asr-nano:
+    image: wangshengjj/fun-asr-nano-2512:latest
+    container_name: fun-asr-nano
+    restart: unless-stopped
+    ports:
+      - "10096:10096"
+    environment:
+      - PYTHONUNBUFFERED=1
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              capabilities: [gpu]
+
+  # ---------- 2. ASR 网关：把 10096 的原生协议包装成对外易用的流式接口 ----------
+  # 对外： ws://<宿主机IP>:10097/v1/realtime   （OpenAI Realtime 风格事件）
+  #        ws://<宿主机IP>:10097/v1/asr        （精简事件 asr.partial / asr.final）
+  # 健康检查： http://<宿主机IP>:10097/health  （?deep=1 连上游握手一起测）
+  asr-gateway:
+    build:
+      context: ./asr-gateway
+    image: asr-gateway:2.2.0
+    container_name: asr-gateway
+    restart: unless-stopped
+    depends_on:
+      - fun-asr-nano
+    ports:
+      - "10097:8000"
+    environment:
+      - "ASR_WS_URL=ws://fun-asr-nano:10096"
+      - "ASR_MODE=2pass"
+      - "ASR_CHUNK_SIZE=[5,10,5]"
+      - "ASR_AUDIO_FS=16000"
+      - "ASR_ITN=true"
+      # commit 后兜底合成句尾结果的等待毫秒数（0 = 关闭兜底，一直等上游）
+      - "ASR_FINALIZE_TIMEOUT_MS=2500"
+      # 事件风格：realtime = OpenAI Realtime 风格；simple = asr.partial / asr.final
+      - "ASR_EVENT_STYLE=realtime"
+      # 热词（JSON 串，也可写成 "机器人:20,导览:15"）
+      # - 'ASR_HOTWORDS={"机器人":20,"导览":15}'
+      - "LOG_LEVEL=INFO"
